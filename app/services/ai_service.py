@@ -1,31 +1,10 @@
-import os
-
-from dotenv import load_dotenv
-from google import genai
 from google.genai import errors as genai_errors
 from sqlalchemy.orm import Session
 
-from app.services.retrieval_service import retrieve_context
+from app.services.gemini_client import client, GEMINI_MODEL
+from app.services.retrieval_service import retrieve_exact_context, retrieve_context_from_intent
+from app.services.intent_service import extract_intent
 from app.exceptions.custom_exception import AIServiceUnavailableException
-
-
-# Load environment variables
-load_dotenv()
-
-
-# Get Gemini API key
-api_key = os.getenv("GEMINI_API_KEY")
-
-if not api_key:
-    raise ValueError(
-        "GEMINI_API_KEY is not configured"
-    )
-
-
-# Create Gemini client
-client = genai.Client(
-    api_key=api_key
-)
 
 
 # =========================================================
@@ -53,7 +32,7 @@ def ask_gemini(question: str) -> str:
 
     try:
         response = client.models.generate_content(
-            model="gemini-3-flash-preview",
+            model=GEMINI_MODEL,
             contents=question
         )
     except genai_errors.APIError:
@@ -65,10 +44,23 @@ def ask_gemini(question: str) -> str:
 # =========================================================
 # RETRIEVAL-AUGMENTED GENERATION
 # =========================================================
+# Two-stage retrieval:
+#   1. Fast path - regex-matched exact IDs/emails, no LLM call.
+#   2. Fallback - Gemini classifies the question into a
+#      structured query plan (entity/operation/filters), which
+#      is then executed as a normal SQLAlchemy query. This is
+#      what handles arbitrary phrasing ("how many", "highest
+#      balance", "savings and loan accounts", "what types
+#      exist", etc.) without hand-written regex per pattern.
 
 def ask_gemini_with_context(db: Session, question: str):
 
-    context_lines, sources = retrieve_context(db, question)
+    context_lines, sources = retrieve_exact_context(db, question)
+
+    if not context_lines:
+        intent = extract_intent(db, question)
+        if intent and intent.get("entity"):
+            context_lines, sources = retrieve_context_from_intent(db, intent)
 
     if context_lines:
         context_text = "\n".join(f"- {line}" for line in context_lines)
@@ -82,14 +74,10 @@ def ask_gemini_with_context(db: Session, question: str):
 
     try:
         response = client.models.generate_content(
-            model="gemini-3-flash-preview",
+            model=GEMINI_MODEL,
             contents=prompt
         )
     except genai_errors.APIError:
-        # Covers Gemini-side outages/overload (e.g. 503 UNAVAILABLE)
-        # as well as other non-2xx responses from the API - surfaced
-        # to the client as a clean, predictable error instead of a
-        # raw 500 with a stack trace.
         raise AIServiceUnavailableException()
 
     return response.text, sources
