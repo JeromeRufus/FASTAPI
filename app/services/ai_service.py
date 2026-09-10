@@ -2,9 +2,11 @@ import os
 
 from dotenv import load_dotenv
 from google import genai
+from google.genai import errors as genai_errors
 from sqlalchemy.orm import Session
 
 from app.services.retrieval_service import retrieve_context
+from app.exceptions.custom_exception import AIServiceUnavailableException
 
 
 # Load environment variables
@@ -49,10 +51,13 @@ Question: {question}"""
 
 def ask_gemini(question: str) -> str:
 
-    response = client.models.generate_content(
-        model="gemini-3-flash-preview",
-        contents=question
-    )
+    try:
+        response = client.models.generate_content(
+            model="gemini-3-flash-preview",
+            contents=question
+        )
+    except genai_errors.APIError:
+        raise AIServiceUnavailableException()
 
     return response.text
 
@@ -75,9 +80,16 @@ def ask_gemini_with_context(db: Session, question: str):
         question=question
     )
 
-    response = client.models.generate_content(
-        model="gemini-3-flash-preview",
-        contents=prompt
-    )
+    try:
+        response = client.models.generate_content(
+            model="gemini-3-flash-preview",
+            contents=prompt
+        )
+    except genai_errors.APIError:
+        # Covers Gemini-side outages/overload (e.g. 503 UNAVAILABLE)
+        # as well as other non-2xx responses from the API - surfaced
+        # to the client as a clean, predictable error instead of a
+        # raw 500 with a stack trace.
+        raise AIServiceUnavailableException()
 
     return response.text, sources

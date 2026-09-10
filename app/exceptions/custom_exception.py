@@ -79,3 +79,22 @@ class InsufficientBalanceException(AppException):
             message="Insufficient account balance",
             status_code=400
         )
+
+
+# =========================================================
+# AI SERVICE UNAVAILABLE
+# =========================================================
+# Raised when the underlying Gemini call fails (e.g. the
+# model is overloaded and returns a 503, or the request
+# otherwise fails on Google's side). Converted into a clean
+# JSON response by the existing global exception handler
+# instead of leaking a raw traceback / 500 to the client.
+
+class AIServiceUnavailableException(AppException):
+
+    def __init__(self):
+
+        super().__init__(
+            message="The AI assistant is temporarily unavailable. Please try again in a moment.",
+            status_code=503
+        )
