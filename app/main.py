@@ -12,6 +12,12 @@ from app.router.account import router as account_router
 from app.router.transaction import router as transaction_router
 from app.router.auth import router as auth_router
 
+# =========================================================
+# NEW - AI ROUTER
+# =========================================================
+
+from app.router.ai import router as ai_router
+
 from app.exceptions.custom_exception import AppException
 from app.exceptions.handlers import app_exception_handler
 
@@ -28,7 +34,9 @@ Base.metadata.create_all(
 # =========================================================
 # CREATE FASTAPI APPLICATION
 # =========================================================
-
+# https://customer-account-api.onrender.com/auth/register
+#https://fastapi-1-kq86.onrender.com/auth/login
+# https://fastapi-1-kq86.onrender.com/customers/
 app = FastAPI(
     title="Customer Account Management API",
     version="1.0.0"
@@ -63,6 +71,14 @@ app.include_router(
 
 app.include_router(
     auth_router
+)
+
+# =========================================================
+# AI ROUTER
+# =========================================================
+
+app.include_router(
+    ai_router
 )
 
 
