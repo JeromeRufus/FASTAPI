@@ -83,6 +83,12 @@ MAX_RE = re.compile(r"\b(highest|maximum|max|largest|greatest|biggest|top)\b", r
 MIN_RE = re.compile(r"\b(lowest|minimum|min|smallest)\b", re.IGNORECASE)
 TOP_N_RE = re.compile(r"\btop\s+(\d+)\b", re.IGNORECASE)
 
+# "What are the account types?" / "what statuses exist?" -
+# asking what distinct values a field can take, not about a
+# specific record.
+QUESTION_WORD_RE = re.compile(r"\b(what|which|distinct|unique)\b", re.IGNORECASE)
+TYPE_OR_STATUS_RE = re.compile(r"\b(types?|kinds?|categories|status(?:es)?)\b", re.IGNORECASE)
+
 # Bare mention of "record(s)" with no explicit list/sum keyword
 # is treated as a count fallback - catches loosely-worded phrasing
 # like "how records on the account table?" (missing "many").
@@ -149,6 +155,8 @@ def detect_aggregate_intent(question: str):
         operation = "sum"
     elif COUNT_RE.search(question):
         operation = "count"
+    elif QUESTION_WORD_RE.search(question) and TYPE_OR_STATUS_RE.search(question):
+        operation = "distinct"
     elif RECORDS_FALLBACK_RE.search(question):
         operation = "count"
     else:
@@ -210,7 +218,18 @@ def retrieve_aggregate_context(db: Session, question: str, intent: dict, max_rec
     if entity == "account":
         query = _apply_account_filters(db, db.query(Account), question, intent)
 
-        if operation == "count":
+        if operation == "distinct":
+            is_status = bool(re.search(r"status", question, re.IGNORECASE))
+            column = Account.status if is_status else Account.account_type
+            label = "status" if is_status else "type"
+            values = _distinct_values(db, column)
+            context_lines.append(
+                f"Distinct account {label} values in use: "
+                f"{', '.join(values) if values else 'none found'}"
+            )
+            sources.append({"type": "aggregate", "id": f"distinct_account_{label}"})
+
+        elif operation == "count":
             total = query.count()
             context_lines.append(f"Total number of accounts matching the filters: {total}")
             sources.append({"type": "aggregate", "id": "count_accounts"})
@@ -242,7 +261,15 @@ def retrieve_aggregate_context(db: Session, question: str, intent: dict, max_rec
     elif entity == "transaction":
         query = _apply_transaction_filters(db, db.query(Transaction), question, intent)
 
-        if operation == "count":
+        if operation == "distinct":
+            values = _distinct_values(db, Transaction.transaction_type)
+            context_lines.append(
+                f"Distinct transaction type values in use: "
+                f"{', '.join(values) if values else 'none found'}"
+            )
+            sources.append({"type": "aggregate", "id": "distinct_transaction_type"})
+
+        elif operation == "count":
             total = query.count()
             context_lines.append(f"Total number of transactions matching the filters: {total}")
             sources.append({"type": "aggregate", "id": "count_transactions"})
