@@ -79,6 +79,14 @@ LIST_RE = re.compile(
     r"all transactions|which accounts|which customers)\b",
     re.IGNORECASE,
 )
+MAX_RE = re.compile(r"\b(highest|maximum|max|largest|greatest|biggest|top)\b", re.IGNORECASE)
+MIN_RE = re.compile(r"\b(lowest|minimum|min|smallest)\b", re.IGNORECASE)
+TOP_N_RE = re.compile(r"\btop\s+(\d+)\b", re.IGNORECASE)
+
+# Bare mention of "record(s)" with no explicit list/sum keyword
+# is treated as a count fallback - catches loosely-worded phrasing
+# like "how records on the account table?" (missing "many").
+RECORDS_FALLBACK_RE = re.compile(r"\brecords?\b", re.IGNORECASE)
 
 OVER_RE = re.compile(
     r"(?:over|above|more than|greater than|>)\s*\$?\s*([\d,]+(?:\.\d+)?)",
@@ -127,19 +135,33 @@ def detect_aggregate_intent(question: str):
     if entity is None:
         return None
 
-    if COUNT_RE.search(question):
-        operation = "count"
-    elif SUM_RE.search(question):
-        operation = "sum"
+    # Order matters: superlative phrasing ("highest balance") is
+    # checked first since it's the most specific, then explicit
+    # "list" phrasing, then sum/count, with a bare-"records"
+    # fallback last.
+    if MAX_RE.search(question):
+        operation = "max"
+    elif MIN_RE.search(question):
+        operation = "min"
     elif LIST_RE.search(question):
         operation = "list"
+    elif SUM_RE.search(question):
+        operation = "sum"
+    elif COUNT_RE.search(question):
+        operation = "count"
+    elif RECORDS_FALLBACK_RE.search(question):
+        operation = "count"
     else:
         return None
+
+    top_n_match = TOP_N_RE.search(question)
+    limit = int(top_n_match.group(1)) if top_n_match else 1
 
     over_match = OVER_RE.search(question)
     under_match = UNDER_RE.search(question)
 
     return {
+        "limit": limit,
         "entity": entity,
         "operation": operation,
         "over": _to_number(over_match.group(1)) if over_match else None,
@@ -198,6 +220,15 @@ def retrieve_aggregate_context(db: Session, question: str, intent: dict, max_rec
             context_lines.append(f"Sum of balances for matching accounts: {total}")
             sources.append({"type": "aggregate", "id": "sum_accounts_balance"})
 
+        elif operation in ("max", "min"):
+            order = Account.balance.desc() if operation == "max" else Account.balance.asc()
+            rows = query.order_by(order).limit(intent["limit"]).all()
+            label = "Highest" if operation == "max" else "Lowest"
+            context_lines.append(f"{label} balance account(s):")
+            for account in rows:
+                context_lines.append(format_account(account))
+                sources.append({"type": "account", "id": account.account_number})
+
         elif operation == "list":
             total = query.count()
             rows = query.order_by(Account.id).limit(max_records).all()
@@ -220,6 +251,15 @@ def retrieve_aggregate_context(db: Session, question: str, intent: dict, max_rec
             total = query.with_entities(func.sum(Transaction.amount)).scalar() or 0
             context_lines.append(f"Sum of amounts for matching transactions: {total}")
             sources.append({"type": "aggregate", "id": "sum_transactions_amount"})
+
+        elif operation in ("max", "min"):
+            order = Transaction.amount.desc() if operation == "max" else Transaction.amount.asc()
+            rows = query.order_by(order).limit(intent["limit"]).all()
+            label = "Highest" if operation == "max" else "Lowest"
+            context_lines.append(f"{label} amount transaction(s):")
+            for transaction in rows:
+                context_lines.append(format_transaction(transaction))
+                sources.append({"type": "transaction", "id": transaction.transaction_number})
 
         elif operation == "list":
             total = query.count()
